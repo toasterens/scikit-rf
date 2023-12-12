@@ -12,7 +12,6 @@ author = 'scikit-rf team'
 
 import sys
 import os
-import sphinx_rtd_theme
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -40,6 +39,7 @@ extensions = [
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
     'sphinx.ext.intersphinx',
+    'sphinx_rtd_theme',
     'nbsphinx',
     #'inheritance_diagram',
     'IPython.sphinxext.ipython_directive',
@@ -96,11 +96,10 @@ pygments_style = 'sphinx'
 # further.  For a list of options available for each theme, see the
 # documentation.
 
-# Add any paths that contain custom themes here, relative to this directory.
-
 html_theme = "sphinx_rtd_theme"
 
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+# Add any paths that contain custom themes here, relative to this directory.
+# html_theme_path = []
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -180,8 +179,20 @@ man_pages = [
 
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/3/objects.inv', None),
+    'python': ('https://docs.python.org/3', None),
     'numpy': ('https://numpy.org/doc/stable', None),
     'pd': ('https://pandas.pydata.org/docs', None),
     'scipy': ('https://docs.scipy.org/doc/scipy/', None),
 }
+
+def process_signature(app, what, name, obj, options, signature, return_annotation):
+
+    func_name = name.split(".")[-1]
+    if func_name.startswith("plot_") and func_name[5:] in rf.Network._generated_functions().keys():
+        signature = signature.split(",")[2:]
+        return "(" + ", ".join(signature), return_annotation
+
+    return signature, return_annotation
+
+def setup(app):
+    app.connect("autodoc-process-signature", process_signature)
