@@ -228,14 +228,17 @@ class PNA(VNA):
             return [msmnt[0] for msmnt in self.measurements]
 
         @property
-        def calibration(self) -> skrf.Calibration:
-            raise NotImplementedError()
-            # orig_query_fmt = self.parent.query_format
-            # self.parent.query_format = ValuesFormat.BINARY_64
+        def calibration(self): #  -> skrf.Calibration:
+            # raise NotImplementedError()
+            orig_query_fmt = self.parent.query_format
+            self.parent.query_format = ValuesFormat.BINARY_64
 
-            # eterm_re = re.compile(r"(\w+)\((\d),(\d)\)")
-            # cset_terms = self.query(f"SENS{self.cnum}:CORR:CSET:ETER:CAT?")
-            # terms = re.findall(eterm_re, cset_terms)
+            eterm_re = re.compile(r"(\w+)\((\d),(\d)\)")
+            cset_terms = self.query(f"SENS{self.cnum}:CORR:CSET:ETER:CAT?")
+            
+            print(f'cset_terms: {cset_terms}')
+            
+            terms = re.findall(eterm_re, cset_terms)
 
             # if len(terms) == 3:
             #     cal = skrf.OnePort
@@ -246,27 +249,139 @@ class PNA(VNA):
             #     # cal = skrf.MultiPort
             #     raise NotImplementedError()
 
-            # coeffs = {}
-            # for term in terms:
-            #     pna_name = term[0]
-            #     skrf_name = re.sub(
-            #         r"([A-Z])", lambda pat: f" {pat.group(1).lower()}", pna_name
-            #     ).strip()
+            print(f'terms: {terms}')
 
-            #     coeffs[skrf_name] = self.query_values(
-            #         f"SENS{self.cnum}:CORR:CSET:ETERM? '{pna_name}({a},{b})'",
-            #         complex_values=True,
-            #         container=np.array,
-            #     )
+        
+            coeffs = {}
+            for term in terms:
+                pna_name = term[0]
+                skrf_name = re.sub(
+                    r"([A-Z])", lambda pat: f" {pat.group(1).lower()}", pna_name
+                ).strip()
+                
+                print(f'skrf_name: {skrf_name}')
+                print(f'pna_name: {pna_name}')
+                print(f"SENS{self.cnum}:CORR:CSET:ETERM? '{term[0]}({term[1]},{term[2]})'")
+                coeffs[skrf_name] = self.query_values(
+                    f"SENS{self.cnum}:CORR:CSET:ETERM? '{term[0]}({term[1]},{term[2]})'",
+                    complex_values=True,
+                    container=np.array,
+                )
 
-            # self.parent.query_format = orig_query_fmt
 
-            # freq = self.frequency
+            # terms: [('CrossTalk', '1', '2'), ('CrossTalk', '2', '1'), ('Directivity', '1', '1'), ('Directivity', '2', '2'), ('LoadMatch', '1', '2'), ('LoadMatch', '2', '1'), ('ReflectionTracking', '1', '1'), ('ReflectionTracking', '2', '2'), ('SourceMatch', '1', '1'), ('SourceMatch', '2', '2'), ('TransmissionTracking', '1', '2'), ('TransmissionTracking', '2', '1')]
+            # cset_terms: "CrossTalk(1,2),CrossTalk(2,1),Directivity(1,1),Directivity(2,2),LoadMatch(1,2),LoadMatch(2,1),ReflectionTracking(1,1),ReflectionTracking(2,2),SourceMatch(1,1),SourceMatch(2,2),TransmissionTracking(1,2),TransmissionTracking(2,1)"
+            
+
+            self.parent.query_format = orig_query_fmt
+
+            freq = self.frequency
+            # return coeffs
+            return coeffs
             # return cal.from_coefs(freq, coeffs)
 
         @calibration.setter
         def calibration(self, cal: skrf.Calibration) -> None:
             raise NotImplementedError()
+
+# #######################################################################################################################################################################
+# NEW
+        def get_calibration_meas(self):
+            orig_query_fmt = self.parent.query_format
+            self.parent.query_format = ValuesFormat.BINARY_64
+
+            stand_terms = self.query(f"SENS{self.cnum}:CORR:CSET:STAN:CAT?")
+            
+            pattern = '(\w+\(\d+,\d+\))'
+            terms = re.findall(pattern, stand_terms)
+            
+            print(terms)
+            
+            coeffs = {}
+            for term in terms:
+                data = self.query_values(
+                    f"SENS{self.cnum}:CORR:CSET:STAN:DATA? '{term}'",
+                    complex_values=True,
+                    container=np.array,
+                )
+                ntw = skrf.Network(s=data,frequency=self.frequency, name=term)
+                coeffs[term] = ntw
+
+            self.parent.query_format = orig_query_fmt
+
+            return coeffs                
+            
+            
+        def get_calibration_error_terms(self):
+            '''
+            PNA_Error_Terms['12-term skrf np'] = {
+            'forward directivity': PNA_Error_Terms['s']['Directivity(1,1)'].s.squeeze(),
+            'forward source match': PNA_Error_Terms['s']['SourceMatch(1,1)'].s.squeeze(),
+            'forward reflection tracking': PNA_Error_Terms['s']['ReflectionTracking(1,1)'].s.squeeze(),
+            'forward transmission tracking': PNA_Error_Terms['s']['TransmissionTracking(1,2)'].s.squeeze(),
+            'forward load match': PNA_Error_Terms['s']['LoadMatch(1,2)'].s.squeeze(),
+            'forward isolation': PNA_Error_Terms['s']['CrossTalk(1,2)'].s.squeeze(),
+            'reverse directivity': PNA_Error_Terms['s']['Directivity(2,2)'].s.squeeze(),
+            'reverse load match': PNA_Error_Terms['s']['LoadMatch(2,1)'].s.squeeze(),
+            'reverse reflection tracking': PNA_Error_Terms['s']['ReflectionTracking(2,2)'].s.squeeze(),
+            'reverse transmission tracking': PNA_Error_Terms['s']['TransmissionTracking(2,1)'].s.squeeze(),
+            'reverse source match': PNA_Error_Terms['s']['SourceMatch(2,2)'].s.squeeze(),
+            'reverse isolation': PNA_Error_Terms['s']['CrossTalk(2,1)'].s.squeeze()
+            }
+            '''
+               
+            orig_query_fmt = self.parent.query_format
+            self.parent.query_format = ValuesFormat.BINARY_64
+
+            cset_terms = self.query(f"SENS{self.cnum}:CORR:CSET:ETER:CAT?")
+            
+            pattern = '(\w+\(\d+,\d+\))'
+            terms = re.findall(pattern, cset_terms)
+
+            
+            coeffs = {}
+            for term in terms:
+                data = self.query_values(
+                    f"SENS{self.cnum}:CORR:CSET:ETERM? '{term}'",
+                    complex_values=True,
+                    container=np.array,
+                )
+
+                ntw = skrf.Network(s=np.squeeze(data),frequency=self.frequency, name=term)
+                coeffs[term] = ntw
+
+            self.parent.query_format = orig_query_fmt
+
+            return coeffs
+
+
+        def get_switch_terms(self, ports=(1, 2)):
+            p1, p2 = ports
+
+            channel = self.cnum
+
+            forward_name = f"CH{channel}_FS"
+            reverse_name = f"CH{channel}_RS"
+
+            self.create_measurement(forward_name, 'a{:}b{:},{:}'.format(p2, p2, p1))
+            self.create_measurement(reverse_name, 'a{:}b{:},{:}'.format(p1, p1, p2))
+
+            self.sweep()
+
+            forward = self.get_measurement(name=forward_name)
+            forward.name = "forward switch term"
+            reverse = self.get_measurement(name=reverse_name)
+            reverse.name = "reverse switch term"
+
+            self.delete_measurement(forward_name)
+            self.delete_measurement(reverse_name)
+            
+            return forward, reverse
+
+
+
+# NEW
+# #######################################################################################################################################################################
 
         @property
         def active_trace_sdata(self) -> np.ndarray:
@@ -283,7 +398,7 @@ class PNA(VNA):
             self.write(f"SENS{self.cnum}:AVER:CLE")
 
         def create_measurement(self, name: str, parameter: str) -> None:
-            self.write(f"CALC{self.cnum}:PAR:EXT '{name}',{parameter}")
+            self.write(f"CALC{self.cnum}:PAR:EXT '{name}','{parameter}'")
             # Not all instruments support DISP:WIND:TRAC:NEXT
             traces = self.query("DISP:WIND:CAT?").replace('"', "")
             traces = [int(tr) for tr in traces.split(",")] if traces != "EMPTY" else [0]
@@ -338,7 +453,9 @@ class PNA(VNA):
         ) -> skrf.Network:
             if ports is None:
                 ports = list(range(1, self.parent.nports + 1))
-
+            
+            # orig_trace_fmt = self.query()
+            self.write('MMEMory:STORe:TRACe:FORMat:SNP RI')
             orig_query_fmt = self.parent.query_format
             self.parent.query_format = ValuesFormat.BINARY_64
             self.parent.active_channel = self
@@ -395,6 +512,7 @@ class PNA(VNA):
             return ntwk
 
         def sweep(self) -> None:
+            # TODO Sweep time could to small --> Timeout happend whens using avg mode
             self.parent.trigger_source = TriggerSource.IMMEDIATE
             self.parent._resource.clear()
 
@@ -422,7 +540,8 @@ class PNA(VNA):
 
             try:
                 sweep_time *= n_sweeps * 1_000  # 1s per port
-                self.parent._resource.timeout = max(sweep_time, 5_000)  # minimum of 5s
+                # print(f'sweep_time: {sweep_time}')
+                self.parent._resource.timeout = max(sweep_time, 20_000)  # minimum of 5s
                 self.parent.wait_for_complete()
             finally:
                 self.parent._resource.clear()
@@ -435,7 +554,11 @@ class PNA(VNA):
 
         self._resource.read_termination = "\n"
         self._resource.write_termination = "\n"
-
+        
+        # TODO Get all available channels from VNA and create channel class
+        # create channel und active channel vertauschen
+        # --> active channel aktiviert am VNA den Channel
+        # --> create channel erstellt channel in skrf und erzeugt S11 in PNA
         self.create_channel(1, "Channel 1")
         self.active_channel = self.ch1
 
