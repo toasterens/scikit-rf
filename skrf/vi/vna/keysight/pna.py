@@ -438,9 +438,24 @@ class PNA(VNA):
 
         self._resource.read_termination = "\n"
         self._resource.write_termination = "\n"
+        # TODO Get all available channels from VNA and create channel class
+        # create channel und active channel vertauschen
+        # --> active channel aktiviert am VNA den Channel
+        # --> create channel erstellt channel in skrf und erzeugt S11 in PNA
 
-        self.create_channel(1, "Channel 1")
-        self.active_channel = self.ch1
+        channel_list = self.query("SYST:CHAN:CAT?")
+        channel_list = channel_list.split(",")
+        
+        if channel_list[0] is None:
+            # No Channel exists
+                self.create_channel(1, "Channel 1")
+                self.active_channel = self.ch1
+        else:
+            # Channel exist
+            for i in channel_list:
+                self.create_channel(int(i), f"Channel {i}")
+                self.active_channel = eval(f'self.ch{i}')
+
 
         self.model = self.id.split(",")[1]
         if self.model not in self._models:
