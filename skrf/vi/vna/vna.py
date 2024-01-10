@@ -77,6 +77,20 @@ class Channel:
         self.query = self.parent.query
         self.query_values = self.parent.query_values
 
+# TODO Add Display functionality
+class Display:
+    """
+    Display of PNA
+
+    .. warning::
+    This class should not be instantiated directly
+    """
+
+    def __init__(
+        self, parent    
+    ) -> None:
+        self.parent = parent
+
 
 class VNA(ABC):
     _scpi = True  # Set to false in subclasses that don't use SCPI
@@ -131,6 +145,27 @@ class VNA(ABC):
         setattr(cls, "delete_channel", delete_channel)
         setattr(cls, "channels", property(_channels))
         setattr(cls, "__getattr__", __getattr__)
+
+    # TODO Implement Display Support
+    def _add_display_support(cls):
+        def create_display(self):
+            raise NotImplementedError
+        
+        def delete_display(self):
+            raise NotImplementedError
+        
+        def _displays(self) -> list[Display]:
+            raise NotImplementedError
+        
+        def __getattr__(self):
+            raise NotImplementedError
+        
+        setattr(cls, "create_display", create_display)
+        setattr(cls, "delete_channel", delete_display)
+        setattr(cls, "displays", property(_displays))
+        setattr(cls, "__getattr__", __getattr__)
+
+
 
     def _setup_scpi(self) -> None:
         setattr(
