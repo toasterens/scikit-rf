@@ -23,112 +23,14 @@ from skrf.vi.validators import (
     IntValidator,
 )
 from skrf.vi.vna import VNA, ValuesFormat
-
-# TODO Enum reihenfolge Sortieren?
-#region Enums
-# Channel
-
-# Display
-class DisplayArrange(Enum):
-    TILE    = "TILE"    # tiles existing windows
-    CASCADE = "CASC"    # overlaps existing windows
-    OVERLAY = "OVERl"   # all traces placed in 1 window
-    STACK   = "STAC"    # 2 windows
-    SPLIT   = "SPL"     # 3 windows
-    QUAD    = "QUAD"    # 4 windows
-    MEASURE = "MEAS"    # 1 measurement per window
-    CHANNEL = "CHAN"    # 1 channel per window
-    LTOR    = "LTOR"    # Arrange existing windows as a single row of side-by-side windows.
+from skrf.vi.vna.keysight.pna_enums import *
 
 
-# Setup
-
-# Meas
-
-# Format
-class TraceFormat(Enum):
-    LOGMAG              = 'MLOG'
-    LinMag              = 'MLIN'
-    PHASE               = 'PHAS'
-    DELAY               = 'GDEL'
-    SMITH               = 'SMIT'
-    POLAR               = 'POL'
-    SWR                 = 'SWR'
-    REAL                = 'REAL'
-    IMAG                = 'IMAG'
-    UPHASE              = 'UPH'
-    PPHASE              = 'PPH'
-    INVSMITH            = 'SADM'
-    COMPLEX             = 'COMP'
-    KELVIN              = 'KELV'
-    FAHRENHEIT          = 'FAHR'
-    CELSIUS             = 'CELS'
-
-
-class AveragingMode(Enum):
-    POINT = "POIN"
-    SWEEP = "SWE"
-
-
-class SweepMode(Enum):
-    HOLD        = "HOLD"
-    CONTINUOUS  = "CONT"
-    GROUPS      = "GRO"
-    SINGLE      = "SING"
-
-
-class SweepType(Enum):
-    LINEAR      = "LIN"
-    LOG         = "LOG"
-    POWER       = "POW"
-    CW          = "CW"
-    SEGMENT     = "SEGM"
-    PHASE       = "PHAS"
-
-
-
-class TriggerSource(Enum):
-    EXTERNAL = "EXT"
-    IMMEDIATE = "IMM"
-    MANUAL = "MAN"
-
-
-class TriggerScope(Enum):
-    ALL = "ALL"
-    CURRENT = "CURR"
-    ACTIVE = "ACT"
-
-
-class TriggerMode(Enum):
-    CHANNEL = "CHAN"
-    SWEEP = "SWE"
-    POINT = "POIN"
-    TRACE = "TRAC"
-
-
-class TriggerSeqType(Enum):
-    EDGE = "EDGE"
-    LEVEL = "LEV"
-
-
-class TriggerSeqSlope(Enum):
-    POSIIVE = "POS"
-    NEGATIVE = "NEG"
-
-
-class TriggeReadyPol(Enum):
-    LOW = "LOW"
-    HIGH = "HIGH"
-
-
-class Models(Enum):
-    DEFAULT = {"device": "default", "nports": 2, "unsupported": []}
-    E8362C  =  {"device": "E8362C", "nports": 2, "unsupported": ["nports", "freq_step", "fast_sweep"]}
-    N5227B  = {"device": "N5227B", "nports": 4, "unsupported": []}
-    N5244B  = {"device": "N5244B", "nports": 4, "unsupported": []}
-    N5247B  = {"device": "N5247B", "nports": 4, "unsupported": []}
-
-#endregion
+def additional_name_decorator(name: str):
+    def decorator(function):
+        function.__name__ = name
+        return function
+    return decorator
 
 
 class PNA(VNA):
@@ -141,13 +43,12 @@ class PNA(VNA):
     }
 
     
-    class Channel(VNA.Channel):
+    class Channel(vna.Channel):
         def __init__(self, parent, cnum: int, cname: str):
             super().__init__(parent, cnum, cname)
 
             # TODO add copy channel
             # TODO make default_msmnt changeable 
-            # TODO Lösen wie bei R&S
             if cnum != 1:
                 default_msmnt = f"CH{self.cnum}_S11_1"
                 self.create_measurement(default_msmnt, "S11")
@@ -157,43 +58,143 @@ class PNA(VNA):
 
         #region Trace
         # Trace Setup
-        
-        # TODO Select Trace
-            
-        # TODO Measure Trace
-            
-        # TODO Trace Title
-            
-        # TODO Add Trace --> Change Name
         def create_measurement(self, name: str, parameter: str) -> None:
-            self.write(f"CALC{self.cnum}:PAR:EXT '{name}',{parameter}")
-            # Not all instruments support DISP:WIND:TRAC:NEXT
+            """create measurement trace in active window"""
+            bal_str = ['dd', 'dc', 'cd', 'cc']
+            pattern = re.compile('|'.join(map(re.escape, bal_str)), re.IGNORECASE)
+            
+            if bool(pattern.search(parameter)):
+                # bal s-parameter meas
+                self._create_meas_bal_bal(name, parameter)
+            else:
+                self.write(f"CALC{self.cnum}:PAR:EXT '{name}',{parameter}")
+                # Not all instruments support DISP:WIND:TRAC:NEXT
+                traces = self.query("DISP:WIND:CAT?").replace('"', "")
+                traces = [int(tr) for tr in traces.split(",")] if traces != "EMPTY" else [0]
+                next_tr = traces[-1] + 1
+                wnum = self.active_window
+                self.write(f"DISP:WIND{wnum}:TRAC{next_tr}:FEED '{name}'")
+
+        trace_new = additional_name_decorator("trace_new")(create_measurement)
+        
+        def _create_meas_bal_bal(self, name: str, parameter: str) -> None:
+            """Create a diff. trace in active window"""
+            # TODO true differential???
+            self.write(f"CALC{self.cnum}:PAR:DEF:EXT '{name}',S11")
+            self.write(f"CALC{self.cnum}:PAR:SEL '{name}'")
+            self.write(f"CALC{self.cnum}:FSIM:BAL:PAR:STATe ON")
+            self.write(f"CALC{self.cnum}:FSIM:BAL:PAR:BBAL:DEF '{parameter}'")
+                        
             traces = self.query("DISP:WIND:CAT?").replace('"', "")
             traces = [int(tr) for tr in traces.split(",")] if traces != "EMPTY" else [0]
             next_tr = traces[-1] + 1
-            self.write(f"DISP:WIND:TRAC{next_tr}:FEED '{name}'")
-            # TODO New Trace
-            # TODO New Trace + Channel
-            # TODO New Trace + Window
-            # TODO New Trace + Window + Channel
-            # TODO New Traces
-        
-        # TODO Delete Trace --> Change Name???
-        def delete_measurement(self, name: str) -> None:
-            self.write(f"CALC{self.cnum}:PAR:DEL '{name}'")
+            wnum = self.active_window
+            self.write(f"DISP:WIND{wnum}:TRAC{next_tr}:FEED '{name}'")       
 
-        # TODO Trace Manager --> Return Trace Window, Channel, Format,...
+        def _create_meas_bal_sing(self):
+            return NotImplemented
+
+
+
+
+        def trace_delete(self, name: str = '') -> None:
+            """delete active trace"""
+            if name == '':
+                name = self.active_trace
+                self.write(f"CALC{self.cnum}:PAR:DEL '{name}'")
+            else:
+                self.write(f"CALC{self.cnum}:PAR:DEL '{name}'")
             
-        # TODO Trace Hold
+        # TraceHold Enum
+        @property
+        def trace_hold(self) -> str:
+            """active trace type of hold"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            hold_type = str(self.query(f"CALC{self.cnum}:MEAS{mnum}:HOLD:TYPE?"))
+            return getattr(self, hold_type, None)
+
+        @trace_hold.setter
+        def trace_hold(self, hold_type: str) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:HOLD:TYPE {hold_type}")
+
+        def trace_hold_restart(self) -> None:
+            """active trace reset currently-stored data points and restarts Trace Hold type"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:HOLD:CLE")
+
+
+
+
+        #region Topology Winwow
+
+        # ALC:FSIM:BAL:PAR:CUST:DEF "SDD33"
+        # balanced_setup_topology_type = VNA.command(
+        # get_cmd=None,
+        # set_cmd="CALC<self:cnum>:FSIM:BAL:DEV <arg>",
+        # doc="""Selects the device type for the balanced measurement""",
+        # validator=EnumValidator(TopologyType),
+        # )
+
+
+        def balanced_setup(self, device : str, topology : str | list[int]):
+            """Balanced / Single Measurement Setup
+            B - Balanced port --> requires 2 physical port numbers: <nPos>, <nNeg>
+            S - Single-ended port --> requires 1 physical port number
+             
+            Parameters
+            ----------
+            device : str
+                _description_
+            topology : str | list[int]
+                Physical port numbers mapped to the logical ports
+
+            Example
+            -------
+            
+            Examples
+            --------
+            CALC:FSIM:BAL:TOP:XXXXX command.
+
+            'The following example sets up 6 physical ports into 5 logical ports:
+            'Logical port 1 is a single ended port mapped to physical port 1
+            'Logical port 2 is a single ended port mapped to physical port 2
+            'Logical port 3 is a balanced port mapped to physical ports 4 and 5
+            'Logical port 4 is a single ended port mapped to physical port 3
+            'Logical port 5 is a single ended port mapped to physical port 6
+
+
+            'Example 1
+            CALC:FSIM:BAL:DEV CUST
+            CALC:DTOP "SSBSS",1,2,4,5,3,6
+            CALC:MEAS:PAR "SDD33"
+
+            'Example 2
+            CALC:PAR:COUN 1
+            CALC:FSIM:BAL:DEV CUST
+            CALC:FSIM:BAL:PAR:STATE ON
+            CALC:DTOPology "SSBSS",1,2,4,5,3,6
+            CALC:FSIM:BAL:PAR:CUST:DEF "SDD33"
+            """
+            self.write(f"CALC{self.cnum}:FSIM:BAL:DEV CUST")
+            self.write(f"CALC{self.cnum}:FSIM:BAL:PAR:STATE ON")
+            self.write(f"CALC:DTOPology '{device}'', {topology}")
+
+        def create_bal_meas(self):
+            pass
+
+
+
+        #endregion
+
+
+
 
         #endregion
             
 
         #region Channel
-        # Channel Setup
-        
-        # TODO Select Channel
-            
+        # Channel Setup        
         # TODO Add Channel
             # TODO New Trace + Channel
             # TODO New Trace + Channel + Window
@@ -208,85 +209,24 @@ class PNA(VNA):
         #endregion
 
 
-        #region Display
-        # Window Setup
-        
-        # TODO Select Window
-            
-        # TODO Window Title
-            
-        # TODO Add Window
-            # TODO New Window
-            # TODO New Trace + Window
-            # TODO New Trace + Channel + Window
-        
-        # TODO Delete Window
-            
-        # TODO Move Window
-            
-        # TODO Window Layout --> nicht vom Channel abhängig --> nach unten verschieben
-        win_layout = VNA.command(
-        get_cmd=None,
-        set_cmd="DISPARR <arg>",
-        doc="""Window arrangement""",
-        validator=EnumValidator(DisplayArrange),
-        )
-
-
-
-        # Sheet Setup
-        # TODO Select Sheet
-            
-        # TODO Sheet Title
-            
-        # TODO Add Sheet
-            # TODO New Sheet
-            # TODO New Trace + Sheet
-            # TODO New Trace + Channel + Sheet
-
-        # TODO Sheet Layout
-            # TODO 1 Sheet
-            # TODO 1 Sheet per trace
-            # TODO 1 Channel per sheet
-            # TODO 1 Window per sheet
-
-        # Display Setup
-        # TODO Trace Maximize
-        
-        # TODO Window Max
-            
-        # TODO Show Table --> None, Marker, Limit, Ripple, Segment
-        
-        # TODO Costomize Disply --> Allgemeine Settings
-            
-        # TODO Touchscreen on/off
-            
-        # TODO Display Update
-
-        #endregion
-
-
-        #region Setup
-        # Main
-        # TODO Sweep Setup --> Fenster mit mehreren Freq. Einstellungen --> gleiches fenster wie im unterpunt sweep
-
-        # TODO Meas Class
-            
-        # TODO Quick Start ???
-            
-        # TODO Device Expert
-        
-        # System Setup
-            
-        # TODO Sound
-            
-        # TODO Remote Interface
-            
-        # TODO LAN Status
-            
-        # TODO Code Emulation
-        
+        #region Setup       
         # Internal Hardware
+        int_hard_reset_settings = VNA.command(
+            get_cmd=None,
+            set_cmd="SENS:PATH:CONF:SEL 'default'",
+            doc="""Reset internal hardware settings""",
+            validator=DelimitedStrValidator(),
+        ) 
+        
+    
+        # TODO richtiger validator?
+        int_hard = VNA.command(
+            get_cmd="SENS<self:cnum>:PATH:CONF:ELEM:SEL? <arg>",
+            set_cmd="SENS<self:cnum>:PATH:CONF:ELEM:SEL <arg>",
+            doc="""setting of a specified element in the current configuration""",
+            validator=DelimitedStrValidator(),
+        )
+        
         
         # TODO RF Path Config
             
@@ -305,9 +245,7 @@ class PNA(VNA):
         # TODO External Device
             
         # TODO Power Meter Setup
-            
-        # TODO Multiport
-            
+                
         # TODO Milimeter Config
 
         #endregion
@@ -319,189 +257,191 @@ class PNA(VNA):
         
         # Balanced
         # TODO Topologie Window
-        
-        # Receivers
-            
-        # Waves
-            
-        # Auxilary
-            
-        # Meas Setup
-        
-        # TODO Conversions
-        
-        # TODO Correction
-            
-        # TODO Trace Hold
-            
-        # TODO Equition Editor
-            
-        # TODO Memory
-            
-        # TODO Time Domain
-            
-        # TODO Pulse Setup
-
+                  
         #endregion
 
 
         #region Format
-        # Format 1
-        # TODO Format
-            
-        # TODO Group Delay Aperature
-            
-        # Format 2
-        # TODO Temperatur
-
 
         #endregion
             
 
         #region Scale
-        # Main
-        # TODO Autoscale
-        
-        # TODO Autoscale All
-            
-        # TODO Scale
-            
-        # TODO Reference Level
-            
-        # TODO Reference Position
-            
-        # TODO Y-Axis Spacing
-            
-        # TODO Scale Coupling
         
         # Electrical Delay
-        # TODO Delay Time
-            
-        # TODO Delay Distance
-            
-        # TODO Distance Units
-            
-        # TODO Velocity Factor
-            
-        # TODO Media
-            
-        # TODO Waveguide Cut off
-        
-        # Constants
-        # TODO System Z0
-            
-        # TODO Phase offset
-            
-        # TODO Mag offset
-            
-        # TODO Mag Slope
+        @property
+        def scale_delay_time(self) -> float:
+            """active trace electrical delay [s]"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            time = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:TIME?"))
+            return getattr(self, time, None)
 
+        @scale_delay_time.setter
+        def scale_delay_time(self, delay: float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:TIME {delay}")
+
+        @property
+        def scale_delay_distance(self) -> float:
+            """active trace electrical delay [s]"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            dis = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:DIST?"))
+            return getattr(self, dis, None)
+
+        @scale_delay_distance.setter
+        def scale_delay_distance(self, dis: float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:DIST {dis}")
+
+        @property
+        def scale_delay_distance_unit(self) -> str:
+            """units for electrical dealy in physical length (distance)"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            unit = str(self.query(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:UNIT?"))
+            return getattr(self, unit, None)
+
+        @scale_delay_distance_unit.setter
+        def scale_delay_distance_unit(self, unit : str) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:UNIT {unit}")
+
+        scale_delay_velocity = VNA.command(
+            get_cmd="SENS<self:cnum>:CORR:RVEL:COAX?",
+            set_cmd="SENS<self:cnum>:CORR:RVEL:COAX <arg>",
+            doc="""velocity factor the be used with eelectrical delay and port extension""",
+            validator=FloatValidator(min=0, max=10, decimal_places=2),
+        )
+        
+        # TODO ScaleDelayMedia Enum
+        @property
+        def scale_delay_media(self) -> str:
+            """active trace media used when calculating the electrical delay"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            unit = str(self.query(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:MED?"))
+            return getattr(self, unit, None)
+
+        @scale_delay_media.setter
+        def scale_delay_media(self, unit: str) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:MED {unit}")
+
+        # TODO Add frequency validator
+        @property
+        def scale_delay_cutoff(self) -> float:
+            """active trace waveguide cutoff frequency used when the electrical delay media is set to WAVEGUIDE"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            unit = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:WGC?"))
+            return getattr(self, unit, None)
+
+        @scale_delay_cutoff.setter
+        def scale_delay_cutoff(self, freq : float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:CORR:EDEL:WGC {freq}")
+
+        # Constants
+        @property
+        def scale_const_offset_mag(self) -> float:
+            """active trace offset magnitude data"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            mag = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:OFFS:MAGN?"))
+            return getattr(self, mag, None)
+
+        @scale_const_offset_mag.setter
+        def scale_const_offset_mag(self, mag : float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:OFFS:MAGN {mag}")
+
+        @property
+        def scale_const_offset_mag_slope(self) -> float:
+            """active trace offsets the data trace magnitude to a value that changes linearly with frequency"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            slope = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:OFFS:MAGN:SLOP?"))
+            return getattr(self, slope, None)
+
+        # TODO frequency validator?
+        @scale_const_offset_mag_slope.setter
+        def scale_const_offset_mag_slope(self, slope : float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:OFFS:MAGN:SLOP {slope}")
+
+        @property
+        def scale_const_offset_phase(self) -> float:
+            """active trace offset magnitude data"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            phase = float(self.query(f"CALC{self.cnum}:MEAS{mnum}:OFFS:PHAS?"))
+            return getattr(self, phase, None)
+
+        @scale_const_offset_phase.setter
+        def scale_const_offset_phase(self, phase : float) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:OFFS:PHAS {phase}")
 
         #endregion
             
 
         #region Math
-        # Memory
-        # TODO Data --> Memory
-            
-        # TODO Normalize
-            
-        # TODO Data math
-            
-        # TODO Display Data Traces
-            
-        # TODO 8510 Mode
-            
-        # TODO Interpolate
-        
-        # Analysis
-        # TODO Conversions
-            
-        # TODO Equition Editor
-            
-        # TODO Statictics
-            
-        # TODO AM Distortion
-            
-        # TODO Trace Deviations
-            
-        # TODO Uncertainity Analysis
-            
-        # TODO Limits
-            
-        # TODO Limit Table
+        @property
+        def math_interpolate(self) -> bool:
+            """active trace memory data interpolation"""
+            mnum = int(self.query("SYST:ACT:TRAC?"))
+            state = bool(self.query(f"CALC{self.cnum}:MEAS{mnum}:MATH:INT:STAT?"))
+            return getattr(self, state, None)
 
-        # Time Domain
-        
-        # TODO Transform
-            
-        # TODO Start Time
-            
-        # TODO Stop Time
-            
-        # TODO Center Time
-            
-        # TODO Span Time
-            
-        # TODO TD Mode
-            
-        # TODO TD Toolbar
-            
-        # TODO Time Domain Setup
-        
-        # Time Gating
-        # TODO Gating
-            
-        # TODO Gate Start
-            
-        # TODO Gate Stop
-            
-        # TODO Gate Center
-            
-        # TODO Gate Span
-            
-        # TODO Gate Type
-            
-        # TODO Gate Shape
-            
-        # TODO Gating Setup
+        @math_interpolate.setter
+        def math_interpolate(self, state : bool) -> None:
+            mnum = int(self.query("SYST:ACT:TRAC?"))  
+            self.write(f"CALC{self.cnum}:MEAS{mnum}:MATH:INT:STAT {state}")
 
         #endregion
 
 
         #region Avg BW
         # Main
-        # TODO Averaging
+        averaging_on = VNA.command(
+            get_cmd="SENS<self:cnum>:AVER:STATE?",
+            set_cmd="SENS<self:cnum>:AVER:STATE <arg>",
+            doc="""Whether averaging is on or off""",
+            validator=BooleanValidator(),
+        )
 
-        # TODO Averaging Restart --> Entspricht clear_averaging?
-        def clear_averaging(self) -> None:
+        averaging_count = VNA.command(
+            get_cmd="SENS<self:cnum>:AVER:COUN?",
+            set_cmd="SENS<self:cnum>:AVER:COUN <arg>",
+            doc="""The number of measurements combined for an average""",
+            validator=IntValidator(1, 65536),
+        )
+
+        def averaging_restart(self) -> None:
             self.write(f"SENS{self.cnum}:AVER:CLE")
 
-        # TODO Average Type
+        averaging_type = VNA.command(
+            get_cmd="SENS<self:cnum>:AVER:MODE?",
+            set_cmd="SENS<self:cnum>:AVER:MODE <arg>",
+            doc="""How measurements are averaged together""",
+            validator=EnumValidator(AveragingType),
+        )
 
-        # TODO Stan / Gaus Settings
         if_bandwidth = VNA.command(
             get_cmd="SENS<self:cnum>:BWID?",
             set_cmd="SENS<self:cnum>:BWID <arg>",
             doc="""The IF bandwidth [Hz]""",
             validator=FreqValidator(),
         )
-        
-        # TODO LF Auto BW
-        
-        # Smoothing
-        # TODO Smoothing
-            
-        # TODO Smooth Percent
-            
-        # TODO Smooth Points
-            
-        # Delay Aperature
-        # TODO Aperature Percent
-            
-        # TODO Aperature Points
-            
-        # TODO Aperature Freq
+
+        if_type= VNA.command(
+            get_cmd="SENS<self:cnum>:IF:BAND:FILT?",
+            set_cmd="SENS<self:cnum>:IF:BAND:FILT <arg>",
+            doc="""Sets and returns the IF bandwidth filter shape""",
+            validator=EnumValidator(IfType),
+        ) 
+
+        # Applicable Models: N522xB, N5234B, N5235B, N524xB, E5080A/B
+        lf_auto_bW_on = VNA.command(
+            get_cmd="SENS<self:cnum>:BWID:TRAC:FORC?",
+            set_cmd="SENS:BWID:TRAC:FORC <arg>",
+            doc="""Reduce IF BW at Low Frequencies feature in segments with IFBW arbitrary""",
+            validator=BooleanValidator(),
+        )       
 
         #endregion
             
@@ -855,6 +795,13 @@ class PNA(VNA):
             validator=FreqValidator(),
         )
 
+        freq_cw = VNA.command(
+            get_cmd="SENS<self:cnum>:FREQ:CW?",
+            set_cmd="SENS<self:cnum>:FREQ:CW <arg>",
+            doc="""Fixed Frequency [Hz]. Need Sweep in CW mode""",
+            validator=FreqValidator(),
+        )
+
         @property
         def freq_step(self) -> int:
             # Not all instruments support SENS:FREQ:STEP
@@ -867,8 +814,6 @@ class PNA(VNA):
             f = validator.validate_input(f)
             freq = self.frequency
             self.npoints = len(range(int(freq.start), int(freq.stop) + f, f))
-
-        # TODO CW
 
         @property
         def frequency(self) -> skrf.Frequency:
@@ -1063,21 +1008,25 @@ class PNA(VNA):
             validator=EnumValidator(SweepMode),
         )
 
-        # TODO Manual Trigger
-        # TODO Namesgebung?
         trigger_manually = VNA.command(
             get_cmd=None,
             set_cmd="INIT<self:cnum>:IMM",
-            doc="""Sends one trigger signal""",
+            doc="""Sends one manual trigger signal""",
             validator=IntValidator(),
         )
 
-        # TODO Trigger Restart
-        # pna_A.ch1.write('ABOR')
+        trigger_restart = VNA.command(
+            get_cmd=None,
+            set_cmd="ABOR",
+            doc="""stops all sweep, then resume per current trigger settings""",
+            validator=IntValidator(),
+        )
+
 
         # TODO Trigger Source
 
         # TODO Trigger --> Window with multiple Trigger Settings
+
 
         #endregion
 
@@ -1090,27 +1039,6 @@ class PNA(VNA):
             set_cmd=None,
             doc="""The list of measurement numbers on this channel""",
             validator=DelimitedStrValidator(int),
-        )
-
-        averaging_on = VNA.command(
-            get_cmd="SENS<self:cnum>:AVER:STATE?",
-            set_cmd="SENS<self:cnum>:AVER:STATE <arg>",
-            doc="""Whether averaging is on or off""",
-            validator=BooleanValidator(),
-        )
-
-        averaging_count = VNA.command(
-            get_cmd="SENS<self:cnum>:AVER:COUN?",
-            set_cmd="SENS<self:cnum>:AVER:COUN <arg>",
-            doc="""The number of measurements combined for an average""",
-            validator=IntValidator(1, 65536),
-        )
-
-        averaging_mode = VNA.command(
-            get_cmd="SENS<self:cnum>:AVER:MODE?",
-            set_cmd="SENS<self:cnum>:AVER:MODE <arg>",
-            doc="""How measurements are averaged together""",
-            validator=EnumValidator(AveragingMode),
         )
 
         n_sweep_groups = VNA.command(
@@ -1144,7 +1072,7 @@ class PNA(VNA):
             )
 
 
-        def get_measurement(self, name: str, sweep: bool=True) -> skrf.Network:
+        def get_measurement(self, name: str, sweep: bool = True) -> skrf.Network:
             if name not in self.measurement_names:
                 raise KeyError(f"{name} does not exist")
 
@@ -1154,7 +1082,7 @@ class PNA(VNA):
             return ntwk
 
 
-        def get_active_trace(self, sweep: bool=True) -> skrf.Network:
+        def get_active_trace(self, sweep: bool = True) -> skrf.Network:
             if sweep :
                 self.sweep()
             
@@ -1256,21 +1184,6 @@ class PNA(VNA):
 
 
 
-    class Display(VNA):
-        def __init__(self):
-            super().__init__()
-            pass
-
-        def win_create(self):
-            pass
-
-
-
-
-
-
-
-
     def __init__(self, address: str, backend: str = "@py") -> None:
         super().__init__(address, backend)
 
@@ -1306,7 +1219,24 @@ class PNA(VNA):
 
 
     #region Trace
-        
+    @property
+    def trace_title(self) -> list:
+        """active trace title"""
+        wnum = self.active_window
+        tnum = int(self.query("SYST:ACT:TRAC?"))
+        title = str(self.query(f"DISP:WIND{wnum}:TRAC{tnum}:TITL:DATA?"))
+        state = bool(self.query(f"DISP:WIND{wnum}:TRAC{tnum}:TITL:STAT?"))
+
+        return getattr(self, [title, state], None)
+
+    @trace_title.setter
+    def trace_title(self, title = '', state = True) -> None:
+        wnum = self.active_window
+        tnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"DISP:WIND{wnum}:TRAC{tnum}:TITL:DATA {title}")
+        self.write(f"DISP:WIND{wnum}:TRAC{tnum}:TITL:STAT {state}")
+
+
     #endregion
 
 
@@ -1323,7 +1253,138 @@ class PNA(VNA):
 
 
     #region Display
+    # Window Setup
+    @property
+    def win_title(self) -> list:
+        """active trace window title"""
+        wnum = self.active_window
+        title = str(self.query(f"DISP:WIND{wnum}:TITL:DATA?"))
+        state = bool(self.query(f"DISP:WIND{wnum}:TITL:STAT?"))
+
+        return getattr(self, [title, state], None)
+
+    @win_title.setter
+    def win_title(self, title = '', state = True) -> None:
+        wnum = self.active_window
+        self.write(f"DISP:WIND{wnum}:TITL:DATA {title}")
+        self.write(f"DISP:WIND{wnum}:TITL:STAT {state}")
+
+    # TODO Auf welchem sheet wird das window erstellt?
+    def win_create(self):
+        """create new window"""
+        wnum = self.query("SYST:WIND:CAT?")
+        wnum = [int(x) for x in wnum.split(',')]
+        wnum_new = wnum[-1] + 1
+        self.query(f"DISP:WIND{wnum_new}:STAT 1")
+
+    def win_delete(self, wnum = -1) -> None:
+        """delete active window on the screen"""
+        if wnum == -1:
+            wnum = self.active_window
+        self.query(f"DISP:WIND{wnum}:STAT 0")
+        
+    # TODO Move selected trace to window
+    # TODO Input trace namen
+    # TODO Get Trace Window Nummber of trace names
+    def win_move(self, fromWin : int, tnum : int, toWin : int) -> None:
+        """Moves a trace from one window to another window"""
+        self.query(f"DISP:WIND{fromWin}:TRAC{tnum}:MOVE {toWin}")
+
+    # TODO Welches Fenster wird hier überhaupt ausgewählt?
+    win_layout = VNA.command(
+        get_cmd=None,
+        set_cmd="DISPARR <arg>",
+        doc="""Window arrangement""",
+        validator=EnumValidator(WindowLayout),
+        )
+
+    # Sheet Setup
+    @property
+    def sheet_title(self) -> list:
+        """active trace sheet title"""
+        snum = int(self.query("SYST:ACT:SHE?"))
+        title = str(self.query(f"DISP:SHE{snum}:TITL:DATA?"))
+        return getattr(self, title, None)
+
+    @win_title.setter
+    def sheet_title(self, title = '', snum = -1) -> None:
+        if snum == -1:
+            snum = int(self.query("SYST:ACT:SHE?")) 
+        self.write(f"DISP:SHE{snum}:TITL:DATA {title}")
+
+    def sheet_create(self):
+        """Add new Sheet"""
+        snum = self.query("SYST:SHE:CAT?")
+        snum = [int(x) for x in snum.split(',')]
+        snum_new = snum[-1] + 1
+        self.query(f"DISP:SHE{snum_new}:STAT 1")
+
+    def sheet_delete(self, snum = -1) -> None:
+        """delete active sheet on the screen"""
+        if snum == -1:
+            snum = int(self.query("SYST:ACT:SHE?"))
+        self.query(f"DISP:SHE{snum}:STAT 0")
+
+    def sheet_layout(self, layout : str, snum = -1) -> None:
+        """Sheet window arrangement"""
+        if snum == -1:
+            snum = int(self.query("SYST:ACT:SHE?"))
+        self.write(f"DISP:SHE{snum}:ARR {layout}")
+
+    # Display Setup
+    trace_maximize = VNA.command(
+        get_cmd="DISP:TMAX?",
+        set_cmd="DISP:TMAX <arg>",
+        doc="""active trace maximize (isolates) in active window""",
+        validator=BooleanValidator(),
+    )
+
+    @property
+    def win_max(self) -> list:
+        """active trace window setting of maximized or normal"""
+        wnum = self.active_window
+        win_size = str(self.query(f"DISP:WIND{wnum}:SIZE?"))
+        return getattr(self, win_size, None)
+
+    # TODO WindowMax ENUM
+    @win_max.setter
+    def win_max(self, win_size : str) -> None:
+        wnum = self.active_window
+        self.write(f"DISP:WIND{wnum}:SIZE {win_size}")
+
+    # TODO DisplayTable ENUM
+    @property
+    def win_table(self) -> None:
+        """active window show table at the bottom of the analyzer screen"""
+        wnum = self.active_window
+        self.write(f"DISP:WIND{wnum}:TABL?")
     
+    @win_table.setter
+    def win_table(self, table : str,  wnum = -1) -> None:
+        if wnum == -1:
+            wnum = self.active_window
+        self.write(f"DISP:WIND{wnum}:TABL {table}")       
+    
+    touchscreen = VNA.command(
+        get_cmd="SYST:TOUC:STAT?",
+        set_cmd="SYST:TOUC:STAT <arg>",
+        doc="""enables and disables touchscreen""",
+        validator=BooleanValidator(),
+    )
+
+    @property
+    def disp_update(self) -> bool:
+        """"""
+        state = bool(self.query("DISP:UPD:STAT?"))
+        return getattr(self, state, None)
+
+    @disp_update.setter
+    def disp_update(self, state : bool) -> None:
+        self.write(f"DISP:UPD:STAT {state}")
+        
+        if state:
+            self.write("DISP:UPD:IMM")
+
     #endregion
         
         
@@ -1333,91 +1394,308 @@ class PNA(VNA):
 
 
     #region Meas
-    
+    # TODO MeasConvertion Enum
+    @property
+    def meas_conversion(self) -> str:
+        """active trace measurement conversion"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        conv = str(self.query(f"CALC:MEAS{mnum}:CONV:FUNC?"))
+        return getattr(self, conv, None)
+
+    @meas_conversion.setter
+    def meas_conversion(self, conv : str) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:CONV:FUNC {conv}")
+
     #endregion
 
     
     #region Format
-
     @property
-    def format_trace(self, mnum = 0) -> str:
-        """Display format for the trace"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
-        format = str(self.query(f"CALCulate:MEASure{mnum}:FORMat?"))
+    def format_trace(self) -> str:
+        """active trace display format"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        format = str(self.query(f"CALC:MEAS{mnum}:FORM?"))
         return getattr(self, format, None)
 
     @format_trace.setter
-    def format_trace(self, form = 'MLOG', mnum = 0) -> None:
-        """Display format for the trace"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
-              
-        self.write(f"CALCulate:MEASure{mnum}:FORMat {form}")
+    def format_trace(self, form = 'MLOG') -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:FORM {form}")
 
     @property
-    def format_group_delay_aper_freq(self, mnum = 0) -> float:
-        """Group delay aperature using a fixed frequency range"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
+    def format_group_delay_aper_freq(self) -> float:
+        """active trace group delay aperature using a fixed frequency range"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
         val = float(self.query(f"CALC:MEAS{mnum}:GDEL:FREQ ?"))
         return getattr(self, val, None)
 
     @format_group_delay_aper_freq.setter
-    def format_group_delay_aper_freq(self, freq : float, mnum = 0) -> None:
-        """Group delay aperature using a fixed frequency range"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
-              
+    def format_group_delay_aper_freq(self, freq : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
         self.write(f"CALC:MEAS{mnum}:GDEL:FREQ {freq}")
 
     @property
-    def format_group_delay_aper_percent(self, mnum = 0) -> float:
-        """Group delay aperature using a percent of the channel frequency span"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
+    def format_group_delay_aper_percent(self) -> float:
+        """atvie trace group delay aperature using a percent of the channel frequency span"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
         val = float(self.query(f"CALC:MEAS{mnum}:GDEL:PERC?"))
         return getattr(self, val, None)
 
     @format_group_delay_aper_percent.setter
-    def format_group_delay_aper_percent(self, percent : float, mnum = 0) -> None:
-        """Group delay aperature using a percent of the channel frequency span"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
-              
+    def format_group_delay_aper_percent(self, percent : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
         self.write(f"CALC:MEAS{mnum}:GDEL:PERC {percent}")
 
     @property
-    def format_group_delay_aper_points(self, mnum = 0) -> float:
-        """Group delay aperature using a fixed number of data points"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
+    def format_group_delay_aper_points(self) -> float:
+        """active trace group delay aperature using a fixed number of data points"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
         val = float(self.query(f"CALC:MEAS{mnum}:GDEL:POIN?"))
         return getattr(self, val, None)
 
     @format_group_delay_aper_points.setter
-    def format_group_delay_aper_points(self, points : float, mnum = 0) -> None:
-        """Group delay aperature using a fixed number of data points"""
-        if mnum == 0:
-            mnum = int(self.query("SYST:ACT:TRAC?"))
-              
+    def format_group_delay_aper_points(self, points : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))  
         self.write(f"CALC:MEAS{mnum}:GDEL:POIN {points}")
 
     #endregion
         
     
     #region Scale
+    # Main
+    def scale_autoscale(self) -> None:
+        """active trace autoscale"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"DISP:MEAS{mnum}:Y:AUTO")
+
+    def scale_autoscale_all(self) -> None:
+        """active trace scale all traces in window"""
+        wnum = self.active_window
+        self.write(f"DISP:WIND{wnum}:Y:AUTO")
     
+    @property
+    def scale_div(self) -> float:
+        """active trace Y axis scale per division associated with the specified measurement"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        scale = float(self.query(f"DISP:MEAS{mnum}:Y:SCAL:PDIV?"))
+        return getattr(self, scale, None)
+
+    @scale_div.setter
+    def scale_div(self, scale : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))  
+        self.write(f"DISP:MEAS{mnum}:Y:SCAL:PDIV {scale}")
+
+    @property
+    def scale_ref_lv(self) -> float:
+        """active trace reference level"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        scale = float(self.query(f"DISP:MEAS{mnum}:Y:SCAL:RLEV?"))
+        return getattr(self, scale, None)
+
+    @scale_ref_lv.setter
+    def scale_ref_lv(self, scale : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))  
+        self.write(f"DISP:MEAS{mnum}:Y:SCAL:RLEV {scale}")
+
+    @property
+    def scale_ref_pos(self) -> float:
+        """active trace scale reference position"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        scale = float(self.query(f"DISP:MEAS{mnum}:Y:SCAL:RPOS?"))
+        return getattr(self, scale, None)
+
+    @scale_ref_pos.setter
+    def scale_ref_pos(self, scale : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))  
+        self.write(f"DISP:MEAS{mnum}:Y:SCAL:RPOS {scale}")
+
+    # TODO Y-Axis Spacing
+    @property
+    def scale_y_axis_spacing(self) -> str:
+        # """active trace Y axis format type, linear or logarithmic"""
+        # ENUM ScaleSpacing
+        # wnum = self.active_window
+        # tnum = 
+        # scale = str(self.query(f"DISP:WIND{wnum}:TRACe{tnum}:Y:SPAC?"))
+        # return getattr(self, scale, None)
+        return NotImplementedError()
+
+    @scale_y_axis_spacing.setter
+    def scale_y_axis_spacing(self, scale : float) -> None:
+        # wnum = self.active_window
+        # tnum = 
+        # self.write(f"DISP:WIND{wnum}:TRACe{tnum}:Y:SPAC {scale}")
+        return NotImplementedError()
+
+    scale_coupling_method = VNA.command(
+        get_cmd="DISP:WIND:TRAC:Y:SCAL:COUP:METH?",
+        set_cmd="DISP:WIND:TRAC:Y:SCAL:COUP:METH <arg>",
+        doc="""method of scale coupling""",
+        validator=EnumValidator(ScaleCoupling),
+    )
+
+    # TODO Scale Coupling
+    def scale_coupling(self, coupling_method = 'OFF', ) -> None:
+        self.scale_coupling_method(coupling_method)
+        
+        # Window
+        # DISPlay:WINDow<wnum>:TRACe:Y[:SCALe]:COUPle[:STATe] <bool>
+        return NotImplementedError()
+
+
+    # constants
+    system_impedance = VNA.command(
+        get_cmd="SENS:CORR:IMP:INP:MAGN?",
+        set_cmd="SENS:CORR:IMP:INP:MAGN <arg>",
+        doc="""System impedance value for the analyzer""",
+        validator=FloatValidator(min=0.001, max=1000, decimal_places=3),
+    )
+
+
     #endregion
         
     
     #region Math
+    # Memory
+    def math_data2mem(self, conv : str) -> None:
+        """active trace data to memory"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:MATH:MEM")
+
+    # TODO Testen, wenn kein math_data2mem vorher gemacht worden ist
+    # TODO MathFunctions Enum
+    def math_data_math(self) -> str:
+        """active trace sets math operation"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        math = str(self.query(f"CALC:MEAS{mnum}:MATH:FUNC?"))
+        return getattr(self, math, None)
+
+    @math_data_math.setter
+    def math_data_math(self, math = 'NORM') -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:MATH:FUNC {math}")       
     
+    # Analysis
+    # TODO Statictics
+    def math_statistics(self, state : bool, ):
+        """"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+
+        if state:
+            self.write("CALC:MEAS{mnum}:FUNC:STAT:STAT 1")
+        else:
+            self.write("CALC:MEAS{mnum}:FUNC:STAT:STAT 0")
+
+
+        # Statistics - Mean, Standard Deviation, Peak to Peak
+        # seuts statistic type that xou can query using  CALC:MEAS:FUNCtion:DATA?
+        # CALCulate:MEASure:FUNCtion:TYPE
+    
+        # User Range - Full Span, User 1 to 16
+        # CALCulate:MEASure:FUNCtion:DOMain:USER[:RANGe]
+
+        # Start
+        # CALCulate:MEASure:FUNCtion:DOMain:USER:STARt
+
+        # Stop
+        # CALCulate:MEASure:FUNCtion:DOMain:USER:STOP
+    
+
     #endregion
         
     
     #region Avg BW
-    
+
+    # Smoothing
+    @property
+    def smoothing_on(self) -> bool:
+        """active trace smoothing ON or OFF"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        state = bool(self.query(f"CALC:MEAS{mnum}:SMO:STAT?"))
+        return getattr(self, state, None)
+
+    @smoothing_on.setter
+    def smoothing_on(self, state : bool) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:SMO:STAT {state}")
+
+    @property
+    def smoothing_percent(self) -> float:
+        """active trace amount of smoothing as a percentage of the number of data points"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        state = float(self.query(f"CALC:MEAS{mnum}:SMO:APER?"))
+        return getattr(self, state, None)
+
+    @smoothing_percent.setter
+    def smoothing_percent(self, percent : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        val_float = FloatValidator(1, 25)
+        percent = val_float.validate_input(percent)
+        self.write(f"CALC:MEAS{mnum}:SMO:APER {percent}")
+
+    @property
+    def smoothing_points(self) -> int:
+        """active trace number of adjacent data points to average"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        state = int(self.query(f"CALC:MEAS{mnum}:SMO:POIN?"))
+        return getattr(self, state, None)
+
+    # TODO  Number of points from 1 point to maximum of 25% of data points in the channel. For example: if number of points in a data trace = 401, the maximum value for points = 100. The points value is always rounded to the closest odd number.
+    @smoothing_points.setter
+    def smoothing_points(self, points : int) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        # npoints_trace = get number of points in data trace
+        # val_float = IntValidator(1, 0.25*npoints_trace)
+        # percent = val_float.validate_input(percent)
+        self.write(f"CALC:MEAS{mnum}:SMO:POIN {points}")
+
+    # Delay Aperature
+    @property
+    def aperature_percent(self) -> float:
+        """active trace group delay aperture using a percent of the channel frequency span"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        state = float(self.query(f"CALC:MEAS{mnum}:GDEL:PERC?"))
+        return getattr(self, state, None)
+
+    # TODO Percent of frequency span to use for the aperture setting. Choose between the equivalent of two data points and 100 percent of the channel frequency span.
+    @aperature_percent.setter
+    def aperature_percent(self, percent : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        # val_float = FloatValidator(2, 25)
+        # percent = val_float.validate_input(percent)
+        self.write(f"CALC:MEAS{mnum}:GDEL:PERC {percent}")
+
+    # TODO Aperature Points
+    @property
+    def aperature_points(self) -> int:
+        """active trace group delay aperture with fixed number of data points"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        state = int(self.query(f"CALC:MEAS{mnum}:GDEL:POIN?"))
+        return getattr(self, state, None)
+
+    # TODO Number of data points to  use for the aperture setting. Choose between two points and the number of points in the channel.
+    @aperature_points.setter
+    def aperature_points(self, points : int) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        # npoints_trace = get number of points in data trace
+        # val_float = IntValidator(1, 0.25*npoints_trace)
+        # percent = val_float.validate_input(percent)
+        self.write(f"CALC:MEAS{mnum}:GDEL:POIN {points}")
+
+    @property
+    def aperature_freq(self) -> float:
+        """active trace group delay aperture with fixed frequency range"""
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        freq = float(self.query(f"CALC:MEAS{mnum}:GDEL:FREQ?"))
+        return getattr(self, freq, None)
+
+    # TODO Frequency range (in Hz) to use for the aperture setting. Choose between the equivalent of two data points and the channel frequency span.
+    @aperature_freq.setter
+    def aperature_freq(self, freq : float) -> None:
+        mnum = int(self.query("SYST:ACT:TRAC?"))
+        self.write(f"CALC:MEAS{mnum}:GDEL:FREQ {freq}")
+
     #endregion
         
     
@@ -1442,11 +1720,11 @@ class PNA(VNA):
 
 
     #region Power
-    rf_power = VNA.command(
+    pow__on = VNA.command(
         get_cmd="OUTPut:STATe?",
         set_cmd="OUTPut:STATe <arg>",
         doc="""Turns RF power from the source on or off""",
-        validator= BooleanValidator(),
+        validator=BooleanValidator(),
     )
     #endregion
 
@@ -1457,8 +1735,13 @@ class PNA(VNA):
 
 
     #region Trigger 
+    trigger_restart = VNA.command(
+        get_cmd=None,
+        set_cmd="ABOR",
+        doc="""stops all sweep, then resume per current trigger settings""",
+        validator=IntValidator(),
+    )
 
-    # TODO Befehl nicht Channel abhängig?
     trigger_source = VNA.command(
         get_cmd="TRIG:SOUR?",
         set_cmd="TRIG:SOUR <arg>",
@@ -1523,7 +1806,19 @@ class PNA(VNA):
         validator=IntValidator(),
     )
 
+    preset = VNA.command(
+        get_cmd=None,
+        set_cmd="*RST",
+        doc="""Preset device""",
+        validator=IntValidator(),
+    )
 
+    full_preset = VNA.command(
+        get_cmd=None,
+        set_cmd="SYST:FPR",
+        doc="""standard preset, deletes the default trace, measurement, and window""",
+        validator=IntValidator(),
+    )
 
 
     #region active Channel/Window/Display/Sheet
@@ -1541,11 +1836,12 @@ class PNA(VNA):
         self.write(f"CALC{ch.cnum}:PAR:MNUM {msmnt}")
 
     @property
-    def active_measurement(self) -> str:
+    def active_trace(self) -> str:
+        '''active trace internal pna name'''
         return self.query("SYST:ACT:MEAS?").replace('"', "")
 
-    @active_measurement.setter
-    def active_measurement(self, name: str) -> None:
+    @active_trace.setter
+    def active_trace(self, name: str) -> None:
         measurements = {
             name: channel
             for channel in self.channels
@@ -1560,15 +1856,18 @@ class PNA(VNA):
         else:
             self.write(f"CALC{measurements[name].cnum}:PAR:SEL '{name}'")
 
+    # Applicable Models: N522xB, N523xB, N524xB, M937xA, P937xA
     @property
     def active_window(self):
-        # TODO Implement function
-        raise NotImplementedError()
+        """Active Window of selected trace"""
+        cnum = int(self.query("SYST:ACT:CHAN?"))
+        wnum = int(self.query(f"CALC{cnum}PAR:WNUM?"))
+        return getattr(self, wnum, None)
     
-    @active_window.setter
-    def active_window(self):
-        # TODO Implement function
-        raise NotImplementedError()
+    # @active_window.setter
+    # def active_window(self):
+    #     # TODO Implement function
+    #     raise NotImplementedError()
     
     @property
     def active_sheet(self):
