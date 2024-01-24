@@ -47,9 +47,37 @@ class TriggerSource(Enum):
     MANUAL = "MAN"
 
 
+class TriggerScope(Enum):
+    ALL = "ALL"
+    CURRENT = "CURR"
+    ACTIVE = "ACT"
+
+
+class TriggerMode(Enum):
+    CHANNEL = "CHAN"
+    SWEEP = "SWE"
+    POINT = "POIN"
+    TRACE = "TRAC"
+
 class AveragingMode(Enum):
     POINT = "POIN"
     SWEEP = "SWE"
+
+
+class TriggerSeqType(Enum):
+    EDGE = "EDGE"
+    LEVEL = "LEV"
+
+
+class TriggerSeqSlope(Enum):
+    POSIIVE = "POS"
+    NEGATIVE = "NEG"
+
+
+class TriggeReadyPol(Enum):
+    LOW = "LOW"
+    HIGH = "HIGH"
+
 
 
 class PNA(VNA):
@@ -80,8 +108,17 @@ class PNA(VNA):
     class Channel(vna.Channel):
         def __init__(self, parent, cnum: int, cname: str):
             super().__init__(parent, cnum, cname)
+            # , trname: str=None, trparameter: str=None
+            # a = len(self.measurement_numbers)
+            # print(a)
+            # if len(self.measurement_numbers) != 1:    
+            #     if trname and trparameter is None:
+            #         default_msmnt = f"CH{self.cnum}_S11_1"
+            #         self.create_measurement(default_msmnt, "S11")
+            #     else:
+            #         self.create_measurement(trname, trparameter)
 
-            if cnum != 1:
+            if cnum != 1: # Check if trace exist --> if not create trace
                 default_msmnt = f"CH{self.cnum}_S11_1"
                 self.create_measurement(default_msmnt, "S11")
 
@@ -188,6 +225,27 @@ class PNA(VNA):
             validator=IntValidator(1, int(2e6)),
         )
 
+        trigger_mode = VNA.command(
+        get_cmd="SENS<self:cnum>:SWE:TRIG:MODE?",
+        set_cmd="SENS<self:cnum>:SWE:TRIG:MODE <arg>",
+        doc="""Trigger mode for the specified channel. This determines what each signal will trigger""",
+        validator=EnumValidator(TriggerMode),
+        )
+
+        trigger_scope = VNA.command(
+        get_cmd="SENSe<self:cnum>:SWEep:TRIGger:DELay?",
+        set_cmd="SENSe<self:cnum>:SWEep:TRIGger:DELay <arg>",
+        doc="""""",
+        validator=FloatValidator(),
+        )
+
+        trigger_manually = VNA.command(
+            get_cmd=None,
+            set_cmd="INIT<self:cnum>:IMM",
+            doc="""Sends one trigger signal""",
+            validator=IntValidator(),
+        )
+
         @property
         def freq_step(self) -> int:
             # Not all instruments support SENS:FREQ:STEP
@@ -284,8 +342,6 @@ class PNA(VNA):
         def calibration(self, cal: skrf.Calibration) -> None:
             raise NotImplementedError()
 
-# #######################################################################################################################################################################
-# NEW
         def get_calibration_meas(self):
             orig_query_fmt = self.parent.query_format
             self.parent.query_format = ValuesFormat.BINARY_64
@@ -311,7 +367,7 @@ class PNA(VNA):
 
             return coeffs                
             
-            
+           
         def get_calibration_error_terms(self):
             '''
             PNA_Error_Terms['12-term skrf np'] = {
@@ -354,7 +410,6 @@ class PNA(VNA):
 
             return coeffs
 
-
         def get_switch_terms(self, ports=(1, 2)):
             p1, p2 = ports
 
@@ -377,11 +432,6 @@ class PNA(VNA):
             self.delete_measurement(reverse_name)
             
             return forward, reverse
-
-
-
-# NEW
-# #######################################################################################################################################################################
 
         @property
         def active_trace_sdata(self) -> np.ndarray:
@@ -408,17 +458,19 @@ class PNA(VNA):
         def delete_measurement(self, name: str) -> None:
             self.write(f"CALC{self.cnum}:PAR:DEL '{name}'")
 
-        def get_measurement(self, name: str) -> skrf.Network:
+        def get_measurement(self, name: str, sweep: bool=True) -> skrf.Network:
             if name not in self.measurement_names:
                 raise KeyError(f"{name} does not exist")
 
             self.parent.active_measurement = name
-            ntwk = self.get_active_trace()
+            ntwk = self.get_active_trace(sweep)
             ntwk.name = name
             return ntwk
 
-        def get_active_trace(self) -> skrf.Network:
-            self.sweep()
+        def get_active_trace(self, sweep: bool=True) -> skrf.Network:
+            if sweep :
+                self.sweep()
+            
             orig_query_fmt = self.parent.query_format
             self.parent.query_format = ValuesFormat.BINARY_64
 
@@ -515,7 +567,6 @@ class PNA(VNA):
             return ntwk
 
         def sweep(self) -> None:
-            # TODO Sweep time could to small --> Timeout happend whens using avg mode
             self.parent.trigger_source = TriggerSource.IMMEDIATE
             self.parent._resource.clear()
 
@@ -591,6 +642,13 @@ class PNA(VNA):
         validator=EnumValidator(TriggerSource),
     )
 
+    trigger_scope = VNA.command(
+        get_cmd="TRIG:SCOP?",
+        set_cmd="TRIG:SCOP <arg>",
+        doc="""Specifies whether a trigger signal is sent to all channels or only the current channel""",
+        validator=EnumValidator(TriggerScope),
+    )
+
     nerrors = VNA.command(
         get_cmd="SYST:ERR:COUN?",
         set_cmd=None,
@@ -605,6 +663,43 @@ class PNA(VNA):
         doc="""The channel numbers currently in use""",
         validator=DelimitedStrValidator(int),
     )
+
+    rf_power = VNA.command(
+        get_cmd="OUTPut:STATe?",
+        set_cmd="OUTPut:STATe <arg>",
+        doc="""Turns RF power from the source on or off""",
+        validator= BooleanValidator(),
+    )
+
+    trigger_delay = VNA.command(
+        get_cmd="TRIGger:DELay?",
+        set_cmd="TRIGger:DELay <arg>",
+        doc="""Trigger delay for ALL channels""",
+        validator=FloatValidator(),
+    )
+
+    trigger_seq_type = VNA.command(
+        get_cmd="TRIGger:TYPE?",
+        set_cmd="TRIGger:TYPE <arg>",
+        doc="""Specifies the type of EXTERNAL trigger input detection (Meas Trig IN)""",
+        validator=EnumValidator(TriggerSeqType),
+    )
+
+    trigger_seq_slope = VNA.command(
+        get_cmd="TRIGger:SLOPe?",
+        set_cmd="TRIGger:SLOPe <arg>",
+        doc="""Polarity expected by the external trigger input circuitry""",
+        validator=EnumValidator(TriggerSeqSlope),
+    )
+
+
+    trigger_ready_polarity = VNA.command(
+        get_cmd="TRIGger:READy:POLarity?",
+        set_cmd="TRIGger:READy:POLarity <arg>",
+        doc="""Specifies the polarity of Ready for Trigger output""",
+        validator= EnumValidator(TriggeReadyPol),
+    )
+    
 
     @property
     def nports(self) -> int:
